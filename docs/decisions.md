@@ -5,6 +5,173 @@ consequence.
 
 ---
 
+## D-039 — Phase 3 closure remediation (immutable snapshot; verified publication metadata)
+**2026-09-08.** The first-remediation closure audit
+(`docs/phase3_codex_closure_audit.md`, PASS WITH CHANGES) confirmed P3-A01 / A02
+/ A05 / A06 / A07 CLOSED and left P3-A03 / A04 partially closed. Decision: three
+narrow fixes only — no redesign, no Phase 4, no new dependency, raw data and
+frozen Phase 1/2 contracts untouched. Report:
+`docs/phase3_closure_remediation_report.md`.
+
+* **P3-A03 residual (BLOCKING).** Endpoint hashes of a mutable path did not
+  prove the intervening reads used one byte stream (Codex changed-and-restored
+  counterexample). `accept_month` now reads the source **in one authoritative snapshot-acquisition read** into a
+  private snapshot (`tempfile` dir, original basename); `_accept_from_snapshot`
+  runs the reserved-column / `Period` / `validate_extract` / `load_rtt_csv` /
+  `count_data_rows` steps against that snapshot, and `report.frame` is derived
+  from it. `report.sha256` is `hashlib.sha256(data).hexdigest()`. The step-12
+  endpoint re-hash block is removed; a post-snapshot change of the *original*
+  path is a `warnings` entry, not a block. `discovery_sha256` is compared to the
+  snapshot digest (change before the snapshot → reject). Original file never
+  written; snapshot deleted in `finally`; never enters provenance.
+* **P3-R01 (BLOCKING, under P3-A04).** `verify_publication` returned
+  `marker["combined_rows"]` unchecked (tamper to 999999 → `valid=True`). It now
+  validates marker structure/types and **reconciles** `combined_rows` across the
+  marker, the checksum-verified sidecar `deterministic.combined_rows`, and the
+  actual Parquet row metadata (`pyarrow.parquet` `num_rows`); any disagreement →
+  `valid=False`. The returned count is the reconciled value.
+* **P3-R02 (NON-BLOCKING, under P3-A04).** A failed retry could copy the
+  invalid current trio over a valid `.prev`. `write_combined_parquet` now
+  rotates `current → *.prev` **only when `verify_publication` on the current
+  trio is valid**. `restore_previous_generation` verifies the `.prev` trio in a
+  scratch dir before restoring, then re-verifies, and returns `restored=True`
+  only on a verified restore — distinguishing *no backup* / *backup invalid* /
+  *restore-copy failed* / *restored & valid*.
+
+Docs corrected: `phase3_ingestion.md` §3 (immutable snapshot; drop "re-checked
+after every read"), §8 (row-count reconciliation, valid-only `.prev` rotation,
+precise interruption state machine — not "every interruption leaves an invalid
+trio"), §9 (P2-U3/P2-U5 → *partially addressed, pending closure confirmation*),
+§11. Regression: 98 Phase 1/2 unchanged + 110 Phase 3 (55 + 17 + **38** in
+`test_phase3_audit_remediation.py`) = **208 pass**. Real April–June result
+unchanged (541,363 rows; hashes, diagnostics, stable `generation_id`, P2-U7
+instances identical). No commit/tag/milestone.
+
+## D-038 — Phase 3 remediation after independent audit (PASS WITH CHANGES)
+**2026-09-08.** Codex independently audited Phase 3 (`docs/phase3_codex_audit.md`)
+and returned PASS WITH CHANGES: five BLOCKING (P3-A01…A05) + two NON-BLOCKING
+(P3-A06/A07). Decision: smallest robust closure changes only — no redesign, no
+Phase 4 work, raw data and frozen Phase 1/2 contracts untouched. Report:
+`docs/phase3_remediation_report.md`.
+
+* **P3-A01** `run_phase3` reconciles the registry's `selected` months against
+  discovered + accepted sources; a missing intended month → `ok=False`,
+  publication withheld (previous generation untouched). `require_months=[...]`
+  supports an explicit, recorded subset. New `IntendedSourceError`; new
+  `Phase3Result` fields `intended_months` / `required_months` /
+  `requested_subset` / `missing_intended` / `unexpected_months`.
+* **P3-A02** `accept_month` binds the registry digest lookup to the canonical
+  reporting month (and filename); a digest registered under a different month is
+  rejected — fail closed. The old filename-mismatch *warning* is now a *block*.
+* **P3-A03** the source is hashed once up front, re-hashed after all reads and
+  compared to the discovery digest (`discovery_sha256` arg); `accept_month`
+  returns the loaded `frame` bound to that digest and `run_phase3` combines from
+  `frame` — the mutable path is never reopened for the payload.
+* **P3-A04** atomic publication protocol in `write_combined_parquet`: write to a
+  private `.staging-*` dir, roundtrip-validate the staged Parquet, copy any
+  existing complete trio to `*.prev`, then `os.replace` Parquet → sidecar →
+  **generation marker (last)**. New `rtt_combined.generation.json` records
+  `generation_id` + the SHA-256 of both files. `verify_publication(out_dir)` is
+  the consumer's validity gate; `restore_previous_generation(out_dir)` rolls
+  back; `run_phase3` fails unless it self-verifies. New `PublicationError`.
+* **P3-A05** `RESERVED_PROVENANCE_COLUMNS` (`source_file`, `source_sha256`,
+  `reporting_month`, `source_row_index`): a source header containing any of them
+  is rejected in `accept_month`; `combine_months` re-asserts
+  (`ReservedColumnError`). The frozen Phase 2 105-band contract is unchanged.
+* **P3-A06** `_RTT_LIKE_RE` extended to catch `rtt_*.csv.bak` / `.csv~` /
+  `.csv.tmp` as malformed candidates (surfaced, not ingested); strict
+  `PRODUCTION_FILENAME_RE` unchanged.
+* **P3-A07** `SourceRegistry.load` validates each entry is an object with
+  string fields (non-object / non-string → `ValueError`, not `TypeError`); the
+  load handler catches `(ValueError, TypeError)` and emits a structured `load:`
+  rejection for a fractional/other non-integer measure cell.
+
+Regression: 98 Phase 1/2 tests unchanged; Phase 3 tests 55 + 17 + **25 new**
+closure cases (`tests/test_phase3_audit_remediation.py`). Real April–June result
+unchanged (541,363 rows; hashes, diagnostics, P2-U7 instances identical).
+
+## D-037 — Cross-month diagnostics are warnings; combine is deterministic and conservation-checked
+**2026-09-08 (Phase 3).** Context: April/May/June must be validated against the
+June-derived contracts without weakening them. Decision: `nhs_rtt.crossmonth`
+produces **warning-only** cross-month diagnostics — code↔name changes,
+name↔code collisions, code appeared/disappeared, coverage & missingness
+prevalence, and the frozen `part_2a_subset_conformance` per month — none of
+which reject a file. `combine_months` orders months ascending, preserves source
+row order, and **asserts** `len(combined) == Σ source rows`
+(`RowConservationError`) and candidate-key completeness + uniqueness both
+directly (`duplicated(subset=key)==0`, no missing key cell) **and** via
+`candidate_key_report(...).usable` (`CombinedKeyError`). Consequence: April
+(0), May (**1**, `NT230`/`05V`/`C_100`) and June (2, `RTG`/`84H`) `Part_2A >
+Part_2` exceptions are surfaced and carried as **P2-U7**, not treated as
+contradictions; no frozen Phase 2 decision is reopened.
+
+## D-036 — CSV → Parquet boundary at `data/interim/`; regenerated, not tracked
+**2026-09-08 (Phase 3).** Decision: the accepted multi-month set is published as
+one combined `data/interim/rtt_combined.parquet` (pyarrow) — wide NHS structure,
+nullable dtypes and `<NA>` missingness preserved, deterministic row order — with
+a sidecar `rtt_combined.ingest_manifest.json` of **observed** ingestion evidence
+(kept separate from the intended-source registry). Both are **git-ignored**
+(regenerable from the raw set + `src/`). `roundtrip_check` asserts data-level
+(not byte-level) equality; the sidecar's volatile `run` block is excluded from
+determinism checks by `deterministic_manifest_view`. No partitioned data-lake
+layout at this scale.
+
+## D-035 — Four provenance columns; `source_row_index` is a parsed-record position
+**2026-09-08 (Phase 3).** Decision: every combined row gains exactly
+`source_file`, `source_sha256`, `reporting_month` (canonical `YYYY-MM`) and
+`source_row_index`. `source_row_index` is explicitly the **0-based position of
+the row among its source file's parsed CSV data records** (what
+`pandas.read_csv` yields), **not** a physical CSV line number — quoted embedded
+newlines do not shift it. Row conservation uses **CSV-aware** record counting
+(`csv.reader`), never raw newline counting. No wall-clock timestamp enters
+row-level identity. The original `Period` column is retained unchanged.
+
+## D-034 — Revised/re-released files: explicit selection or fail closed
+**2026-09-08 (Phase 3, P2-U5).** Context: `Period` does not distinguish a
+revised release of a month from the original. Decision:
+`SourceRegistry.resolve_month` treats *same month + same SHA-256* as one
+artifact (no double-ingest) and *same month + different SHA-256* as distinct
+release candidates that are accepted **only if exactly one** observed digest is
+a `selected: true` registry entry for that month — otherwise
+`AmbiguousRevisionError` (**fail closed**). Never resolved by file order, mtime,
+filename sort, size or discovery order. NHS revision metadata is **not
+invented**. `SourceRegistry.load` enforces ≤1 `selected` per month and exactly
+one when a month lists multiple distinct-hash releases.
+
+## D-033 — `data/raw/manifest.json`: tracked registry of the intended source set
+**2026-09-08 (Phase 3, P2-U3).** Decision: a JSON registry at
+`data/raw/manifest.json` — one entry per byte-stream: `reporting_period`,
+`file`, `sha256`, `selected`, optional `revision_note` / `source_url`. It is the
+**authoritative intended source set** and is tracked via a precise `.gitignore`
+negation (`!data/raw/manifest.json`); `data/raw/*` (the raw CSVs) stays ignored.
+**Generated validation results are not stored here** — observed evidence lives
+in `data/interim/rtt_combined.ingest_manifest.json`. Provenance still missing
+(source URL, download timestamp, NHS publication date) is left `null`, not
+fabricated (D-004/D-011 stand).
+
+## D-032 — Per-month acceptance gate reuses the frozen Phase 1/2 contracts
+**2026-09-08 (Phase 3).** Decision: `nhs_rtt.ingest.accept_month` is the single
+monthly gate. It **reuses** `semantics.validate_extract` (exact 105-band
+schema), `semantics.load_rtt_csv` (blank-preserving, negatives rejected) and
+`semantics.candidate_key_report` — it does not re-define them — and adds:
+filename-contract check, SHA-256 provenance (byte-stream must be in the
+registry, or an explicit `expected_sha256`), a single-and-parseable `Period`
+that agrees with the filename, an independent CSV-aware row-conservation
+cross-check, and an explicit whitespace-only key-cell check. A rejected file is
+only *logically* rejected — never moved, renamed or "repaired". Consequence: all
+98 Phase 1/2 tests still pass; 72 new Phase 3 tests added.
+
+## D-031 — Phase 3 split into `ingest.py` + `crossmonth.py`
+**2026-09-08 (Phase 3).** Decision: reusable Phase 3 logic is two modules —
+`src/nhs_rtt/ingest.py` (deterministic discovery, SHA-256, registry/provenance,
+`Period` validation, per-month acceptance) and `src/nhs_rtt/crossmonth.py`
+(cross-month diagnostics, deterministic combine, Parquet publication). Import
+direction is one-way (`crossmonth` → `ingest`); `ingest.main()` reaches
+`crossmonth` only lazily, so there is no cycle. `python -m nhs_rtt.ingest`
+delegates to `crossmonth.run_phase3`. `notebooks/03_multi_month_ingestion.ipynb`
+is a thin orchestration/narrative layer; `docs/phase3_ingestion.md` is the
+dedicated architecture doc. No new dependencies.
+
 ## D-030 — Phase 2 closure remediation (narrow patch for the residual blockers)
 **2026-09-07.** The remediation was re-audited (`docs/phase2_closure_audit.md`,
 PASS WITH CHANGES): 5 findings CLOSED (P2-A02/A03/A05/A07/A10), 5 PARTIALLY
@@ -320,3 +487,5 @@ where compiled wheels are unavailable. Decision: `nhs_rtt.profile` uses only
 transparent **estimate**, not a pandas measurement. Consequence: a profile can
 always be produced; a precise in-memory figure needs a later pandas-based
 utility if required.
+
+Snapshot read-count clarification: one authoritative snapshot-acquisition read plus an informational reread used only for warning/reporting; the original source is not literally read only once in total.

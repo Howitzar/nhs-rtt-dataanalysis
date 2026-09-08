@@ -1,0 +1,30 @@
+{
+  "_comment": "Authoritative INTENDED source set for NHS RTT monthly ingestion (Phase 3). One entry per raw monthly file. 'selected' marks the authoritative release for a reporting period when more than one exists. Generated validation results are NOT stored here - see data/interim/rtt_combined.ingest_manifest.json. See docs/phase3_ingestion.md and docs/data_provenance.md.",
+  "schema_version": 1,
+  "sources": [
+    {
+      "reporting_period": "2026-04",
+      "file": "rtt_2026_04.csv",
+      "sha256": "0486aca5891a96af4f15e2f4559795138baef08b0ed580602b8c3a7aec6a56e9",
+      "selected": true,
+      "revision_note": null,
+      "source_url": null
+    },
+    {
+      "reporting_period": "2026-05",
+      "file": "rtt_2026_05.csv",
+      "sha256": "fee364bc3654cf666f79d3485d26e2ada649a3418988a47aa1784e93294a5707",
+      "selected": true,
+      "revision_note": null,
+      "source_url": null
+    },
+    {
+      "reporting_period": "2026-06",
+      "file": "rtt_2026_06.csv",
+      "sha256": "edc3927e4a0065855ad3b2347e7f82688e687b065406eefb49e2f67a9cd67f02",
+      "selected": true,
+      "revision_note": "Phase 1/2 development and validation month.",
+      "source_url": null
+    }
+  ]
+}

@@ -75,15 +75,39 @@ Evidence classes: **DOCS+DATA** = NHS definition + shown in June data;
   folded into a band. **The earlier "negligible / folded" inference is
   withdrawn** — neither the empty field nor the zero residual proves it.
 * **P2-U3** cross-month stability of code↔name maps and the candidate key;
-  revised-release handling. Required during multi-month ingestion.
+  revised-release handling; intended-set completeness; month-specific artifact
+  authorization. **Partially addressed for ingestion in Phase 3 — pending
+  independent closure confirmation** (`docs/phase3_ingestion.md` §7, §9;
+  `docs/phase3_codex_audit.md`; `docs/phase3_codex_closure_audit.md`;
+  `docs/phase3_remediation_report.md`; `docs/phase3_closure_remediation_report.md`):
+  per-file **and** combined 105-band + candidate-key checks;
+  `mapping_diagnostics` reports code↔name / membership drift;
+  `SourceRegistry` + `resolve_month` give a fail-closed revised-release policy;
+  intended-source completeness reconciled before publication (P3-A01, CLOSED);
+  provenance bound to the reporting month (P3-A02, CLOSED); accepted bytes bound
+  to the published rows via an **immutable snapshot** (P3-A03 closure, D-039 —
+  not yet re-audited); reserved provenance names rejected (P3-A05, CLOSED).
+  April–June 2026 show **no** schema / key / map drift. Full ingestion closure is
+  claimed only once the snapshot fix and P3-R01/R02 pass an independent check.
 * **P2-U4** provider organisational-type classification (needs ODS `etr` /
   `ephp` / `ephpsite` / `ect` reference files). Do not infer type from names.
 * **P2-U5** `Period` literal → calendar-month-end; file-revision handling.
-  Part-specific temporal meaning (flow vs month-end stock) **is** documented.
+  **Partially addressed for ingestion in Phase 3 — pending closure confirmation**
+  (`docs/phase3_ingestion.md` §5, §9): `Period` parses to a canonical
+  `reporting_month` that must agree with the filename; revised releases resolve
+  by explicit registry selection or fail closed; the *selected* identity is
+  bound to the *published* bytes via the immutable snapshot (P3-A02/A03, D-039).
+  Mapping `Period` to a calendar **month-end date** and the flow-vs-stock
+  temporal model in analysis remain Phase 4/5. Part-specific temporal meaning
+  (flow vs month-end stock) is documented in `rtt_semantics.md` §2.
 * **P2-U6** full per-band day ranges — **narrowed**: 5 NHS examples + stated
   sequence; intermediate bounds derived (`7n+1 … 7(n+1)` for band `n`–`n+1`).
-* **P2-U7** (new) the `RTG` / `84H` `Part_2A > Part_2` count exception — a
-  data-quality issue. Raw values preserved and flagged; any measure assuming
+* **P2-U7** the `Part_2A > Part_2` count exception — a source data-quality
+  issue. **Still carried after Phase 3.** `nhs_rtt.crossmonth.part2a_subset_
+  diagnostics` runs the frozen conformance check per month; values are preserved
+  and flagged, never capped. Cross-month instances (Apr–Jun 2026): April 0,
+  **May 1** (`NT230` / `05V` / `C_100`, `Part_2A = 2 > Part_2 = 1`), June 2
+  (`RTG` / `84H` / `C_502` and its `C_999`). Any measure assuming
   `Part_2A <= Part_2` must validate the invariant per group first.
 
 ## Data-availability note

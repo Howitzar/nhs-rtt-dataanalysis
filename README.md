@@ -4,8 +4,9 @@ A trustworthy, reproducible data-ingestion and validation pipeline for monthly
 NHS Referral-to-Treatment (RTT) waiting-times data.
 
 **Development month:** June 2026 (`data/raw/rtt_2026_06.csv`) — see
-`docs/decisions.md` D-001. April/May 2026 files exist but are out of scope for
-Phase 1.
+`docs/decisions.md` D-001. April and May 2026 were out of scope for Phases 1–2
+and enter as the first cross-month validation in Phase 3
+(`docs/phase3_ingestion.md`).
 
 ## Goal
 
@@ -49,13 +50,19 @@ bounds, not pins**; there is no lockfile yet.
 
 ## Pipeline stages
 
-| Stage     | Module                  | Purpose                                        |
-|-----------|-------------------------|------------------------------------------------|
-| Ingest    | `nhs_rtt.ingest`        | Locate, download, checksum, and load raw files |
-| Profile   | `nhs_rtt.profile`       | Describe structure, types, ranges, nulls       |
-| Validate  | `nhs_rtt.validate`      | Assert documented expectations, flag breaches  |
-| Transform | `nhs_rtt.transform`     | Reshape to tidy analytical form                |
-| Metrics   | `nhs_rtt.metrics`       | Recompute headline RTT metrics for checking    |
+| Stage     | Module(s)                              | Status | Purpose |
+|-----------|---------------------------------------|--------|---------|
+| Profile   | `nhs_rtt.profile`                      | Phase 1 ✅ | Describe structure, types, ranges, nulls |
+| Semantics | `nhs_rtt.semantics`                    | Phase 2 ✅ | Field meanings, grain, arithmetic, candidate key, exact 105-band gate |
+| Ingest    | `nhs_rtt.ingest` + `nhs_rtt.crossmonth`| Phase 3 ✅ | Deterministic multi-month discovery, SHA-256 provenance, per-month acceptance, cross-month diagnostics, deterministic combine → Parquet |
+| Transform | `nhs_rtt.transform`                    | Phase 4 | Reshape to tidy analytical form |
+| Metrics   | `nhs_rtt.metrics`                      | Phase 7 | Recompute headline RTT metrics for checking |
+
+Phase 3: `python -m nhs_rtt.ingest` (or `notebooks/03_multi_month_ingestion.ipynb`)
+discovers `data/raw/rtt_YYYY_MM.csv` against the registry `data/raw/manifest.json`
+(tracked), validates each month against the frozen Phase 1/2 contracts, and writes
+the combined **`data/interim/rtt_combined.parquet`** (git-ignored, regenerated
+from the raw set + `src/`). See `docs/phase3_ingestion.md`.
 
 ## Reproducibility
 

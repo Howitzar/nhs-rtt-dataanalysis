@@ -33,6 +33,8 @@ data/processed/*
 data/reference/*
 !data/**/README.md
 !data/**/.gitkeep
+# Tracked exception: the Phase 3 source registry (intended source set, no data).
+!data/raw/manifest.json
 
 # Generated outputs (regenerable from src/ + notebooks/; summaries live in docs/)
 outputs/profiles/*
