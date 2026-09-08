@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Environments / secrets
+.env
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data — keep the folders, ignore their contents
+data/raw/*
+data/interim/*
+data/processed/*
+data/reference/*
+!data/**/README.md
+!data/**/.gitkeep
+
+# Generated outputs (regenerable from src/ + notebooks/; summaries live in docs/)
+outputs/profiles/*
+outputs/phase2/*
+outputs/figures/*
+outputs/tables/*
+!outputs/**/.gitkeep
+
+# Independent audit / review execution evidence (kept locally; conclusions live in docs/phase*_audit.md)
+outputs/audit/*
+!outputs/audit/.gitkeep
+
+# IDE
+.idea/
+.vscode/
