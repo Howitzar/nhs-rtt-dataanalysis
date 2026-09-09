@@ -128,3 +128,79 @@ the `Total` / `Total All` / band arithmetic, band interval inclusivity, the
 candidate key, `C_999` roll-up status, and provider-type scope are all covered
 in **`docs/rtt_semantics.md`** and **`docs/rtt_grain_and_aggregation.md`**.
 Still open: `docs/assumptions.md` "Carried forward" (P2-U1…P2-U6).
+
+---
+
+## Phase 3 additions — provenance columns (combined publication)
+
+`data/interim/rtt_combined.parquet` = the wide source structure of every
+accepted month **plus four provenance columns** (`docs/phase3_ingestion.md` §7):
+
+| Column | Type | Meaning |
+|---|---|---|
+| `source_file` | string | basename of the accepted raw CSV (never a temp/snapshot name) |
+| `source_sha256` | string | SHA-256 of that file's exact raw bytes |
+| `reporting_month` | string | canonical `"YYYY-MM"` (agreed filename == parsed `Period`) |
+| `source_row_index` | Int64 | 0-based position of the row among its source file's **parsed** CSV data records — not a physical line number |
+
+The raw `Period` column is retained unchanged alongside `reporting_month`.
+
+---
+
+## Phase 4 additions — analytical datasets (`data/processed/`, git-ignored)
+
+Field categories: **source** (unchanged Phase 1/2 columns), **provenance**
+(Phase 3, above), **derived analytical**, **data-quality / condition flag**. Full
+contract, types, nullability and rationale: `docs/phase4_transformation.md` §4–9.
+
+The output set is published as one coherent generation with a commit marker
+`phase4_generation.json` (binds the consumed Phase 3 identity + every output's
+SHA-256 / schema / rows); the consumer gate is
+`transform.verify_phase4_publication(out_dir)` (`docs/phase4_transformation.md`
+§10).
+
+### `rtt_analytical_wide.parquet` — 541,363 rows × 138 cols (row-preserving)
+
+125 Phase 3 columns carried through verbatim (**no `fillna(0)`**) + 13 derived:
+
+| Column | Category | Type | Null | Derivation / note |
+|---|---|---|---|---|
+| `reporting_year` | derived analytical | Int16 | no | `int(YYYY)` of `reporting_month` |
+| `reporting_month_num` | derived analytical | Int8 | no | `int(MM)` of `reporting_month` |
+| `reporting_month_name` | derived analytical | string | no | English month name |
+| `reporting_period_start_date` | derived analytical | **datetime64[us]** (enforced; Arrow `timestamp[us]`) | no | first day of the reporting month; a **sortable monthly anchor, not an event date**. Resolution enforced with `.astype` and asserted (P4-A05). Month-end date / stock-flow model → Phase 5 (P2-U5). |
+| `is_treatment_function_total` | derived classification | boolean | no | `Treatment Function Code == "C_999"`. Use C_999 **or** detail, never both. |
+| `is_nonc_commissioner` | derived classification | boolean | no | `Commissioner Org Code == "NONC"`. Legitimate semantic category; **not** a DQ condition. |
+| `rtt_part_event_basis` | derived classification | string | no | 1:1 map of `RTT Part Type` (S1 §10.1.1.2): `completed_admitted_in_month` / `completed_non_admitted_in_month` / `incomplete_at_month_end` / `incomplete_with_dta_at_month_end` / `new_clock_starts_in_month` |
+| `rtt_part_carries_bands` | derived classification | boolean | no | part ∈ (1A,1B,2,2A); Part_3 has no bands |
+| `rtt_part_is_month_end_snapshot` | derived classification | boolean | no | part ∈ (2,2A) — stock parts; do not sum across months; `Part_2A ⊆ Part_2` |
+| `dq_all_bands_missing` | data-quality condition flag | boolean | no | all 105 band cells `<NA>`. **Factual condition flag; structurally expected for Part_3** (bands not collected). Current: 109,474 rows |
+| `dq_total_missing` | data-quality condition flag | boolean | no | `Total` is `<NA>`. **Factual condition flag; structurally expected for Parts 2/2A/3** (`Total` not collected). Current: 391,233 rows |
+| `dq_part2a_gt_part2` | data-quality condition flag | boolean | no | a matching Part_2 row with a **numeric** `Total All` exists at `[reporting_month, Provider, Commissioner, TFC]` and this Part_2A row's `Total All` is strictly greater. **Anomalous** (P2-U7); values preserved, never capped. Current: Apr 0 · May 1 · Jun 2 |
+| `dq_part2a_no_matching_part2` | data-quality condition flag | boolean | no | **no matching Part_2 row with a usable (non-null) `Total All` comparator** — covers *both* "no Part_2 row at `[reporting_month, Provider, Commissioner, TFC]`" and "Part_2 row present but `Total All` is `<NA>`". Matches the frozen `part_2a_subset_conformance`. Current: Apr 5 · May 3 · Jun 0 |
+
+### `rtt_waiting_band_long.parquet` — 56,843,115 rows × 14 cols (dense: wide × 105)
+
+| Column | Category | Type | Null | Note |
+|---|---|---|---|---|
+| `reporting_month` | provenance | string | no | |
+| `Period` | source | string | no | raw, unchanged |
+| `Provider Org Code` / `Commissioner Org Code` / `RTT Part Type` / `Treatment Function Code` | source | string | no | codes identify; names not carried into long form |
+| `source_file` / `source_sha256` | provenance | string | no | source provenance (not discarded) |
+| `source_row_index` | provenance | Int64 | no | parent lineage |
+| `wait_band_order` | derived analytical | Int16 | no | 1–105, deterministic |
+| `wait_band_label` | derived analytical | string | no | canonical source band-column name |
+| `wait_band_lower_weeks` | derived analytical | Int16 | no | 0…104 |
+| `wait_band_upper_weeks` | derived analytical | Int16 | **yes** | `<NA>` for the open `>104` band |
+| `pathway_count` | source (band cell) | Int64 | **yes** | explicit `0` → `0`; source `<NA>` → `<NA>`. A **derived band observation of a reported count**, not a patient record. |
+
+Lineage: `(source_file, source_row_index, wait_band_order)` identifies the exact
+source cell.
+
+### `wait_band_metadata.parquet` — 105 rows (derived reference)
+
+`wait_band_order`, `wait_band_label`, `wait_band_lower_weeks`,
+`wait_band_upper_weeks` (`<NA>` = open), `wait_band_lower_days` /
+`wait_band_upper_days` (**DERIVED** per P2-U6, labelled derived), `is_open_ended`.
+Derived from `semantics.expected_week_band_names()` — not a second hand list. No
+KPI/threshold columns (Phase 7).

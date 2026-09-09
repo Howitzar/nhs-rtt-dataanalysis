@@ -5,6 +5,188 @@ consequence.
 
 ---
 
+## D-042 — Phase 4 closure-audit residuals (P4-R01 / P4-R02 / P4-R03)
+**2026-09-09 (Phase 4).** The focused independent Codex closure audit
+(`docs/phase4_codex_closure_audit.md`) returned **PASS WITH CHANGES**: P4-A01 /
+A04 / A05 **CLOSED**; P4-A02 / A03 not yet closed because of three localized
+residual defects. Decision: three bounded fixes only — no redesign of
+snapshot consumption, staged/marker-last publication or recovery. Codex closure
+evidence under `outputs/audit/phase4_closure/` preserved.
+
+* **P4-R01 — exact NA-safe band bounds in `reconcile_long_against_wide`.** The
+  secondary in-memory reconciler compared `wait_band_lower_weeks` /
+  `wait_band_upper_weeks` with nullable equality + a skip-NA reduction, so
+  all-NA bounds could pass. Now: expected + actual lower bounds must both be
+  non-null and integer-equal; the upper-bound null mask must match the metadata
+  exactly (only the open `>104` band may be null) and numeric bounds are
+  compared only at non-null positions. No skip-NA reductions.
+* **P4-R02 — integer-exact `pathway_count` in `validate_persisted_long`.** The
+  newly authoritative persisted validator routed the wide reference and the
+  serialized counts through `float64`, so `2**53+1` vs `2**53` compared equal.
+  Now: the wide reference is an `int64` matrix + a separate NA mask; the
+  persisted Arrow column is read via `pa.Array.fill_null(0).to_numpy()` (no
+  `float64`), and the identity/order/label/bound reads use the Arrow column
+  arrays directly. The full nullable `Int64` domain is validated exactly.
+* **P4-R03 — `verify_phase4_publication` enforces the complete manifest
+  contract.** It trusted whichever entries a manifest listed. Now it enforces:
+  exactly the canonical `REQUIRED_MANIFEST_OUTPUTS` at canonical filenames
+  (no missing / extra / duplicate / redirected / traversal member); every
+  field's type and value (`phase == 4`; 64-hex ids/hashes; positive counts;
+  `wait_band_metadata_rows == 105`; `bands_per_parent == 105`;
+  `long_equals_wide_times_bands is True`; `long == wide × 105`;
+  `combined_rows == analytical_wide_rows`); every physical claim re-checked
+  against disk (SHA-256, bytes, Parquet rows/columns/column-names/schema; the
+  long Parquet must carry the canonical schema); the hashed JSON report
+  reconciled with the manifest (Phase 3 identity + row counts); and
+  `phase4_generation_id` **recomputed** via the single shared
+  `compute_phase4_generation_id` (used by both manifest build and verify).
+  Every failure returns a structured `{"valid": False, "reason": …}` — no
+  `KeyError`. A malformed current manifest is not eligible for `*.prev`
+  rotation. The docs now also record that after the marker-last commit point a
+  fault may leave the **coherent new generation valid** (an accepted state).
+
+Regression: **323 pass** (208 frozen + 115 in `test_transform.py`). Real
+April–June result unchanged: wide 541,363 × 138; long 56,843,115; zeros
+35,174,239; NA 17,364,420; positives 4,304,456; all-band-missing 109,474;
+`Total` missing 391,233; `Total All` missing 0; P2-U7 violations 0/1/2,
+unmatched 5/3/0. `phase4_generation_id` stable
+`c15eecd959e2598e918ffb81f524373ce3de681071cd9f6a2a4f130c77267c86`; Phase 3
+unchanged (`e5e1a0a4…`, verifies). No commit/tag/milestone.
+
+## D-041 — Phase 4 Codex remediation (P4-A01 … P4-A05)
+**2026-09-09 (Phase 4).** The independent Codex audit
+(`docs/phase4_codex_audit.md`) returned **PASS WITH CHANGES**: the real-data
+transformation was confirmed correct (541,363 × 138 wide; 56,843,115 × 14 long;
+full independent persisted-output reconciliation, 0 discrepancies; P2-U7,
+C_999/NONC/RTT-Part semantics, band metadata, dense-long practicality, no Phase
+5+ scope leakage), with five bounded findings to close. Decision: smallest
+coherent closure changes only — no redesign, no reopening of frozen Phase 1–3
+behaviour, no new dependency, grains unchanged. Codex evidence under
+`outputs/audit/phase4/` and `docs/phase4_codex_audit.md` preserved.
+
+* **P4-A01 (input-byte binding).** `load_verified_publication` now copies the
+  publication trio into a **private immutable snapshot**, runs
+  `crossmonth.verify_publication` against *that* snapshot, derives the consumed
+  digest from the same snapshot bytes, and parses only the snapshot. A
+  concurrent replace, or a change-and-restore of the live path during the read,
+  can no longer detach the returned frame / recorded digest / generation
+  identity from the verified bytes. Existing invalid-marker/hash/row-count
+  rejection unchanged.
+* **P4-A02 (persisted-long validation).** New `validate_persisted_long`
+  (bounded-memory, streamed positionally from the on-disk Parquet) is run
+  **mandatorily** by `run_phase4` before publication: exact schema, exact row
+  count, `wait_band_order`/label/bounds, all nine parent/provenance identity
+  fields, `pathway_count` value + zero/NA state — each vs the verified wide/
+  source cell. Rejects repeated/missing/reordered bands, wrong order/label/
+  bounds, swapped values, zero↔NA changes, wrong identity, duplicate/extra
+  observations, **including faults introduced after serialization** (~33 s on
+  the real long file). `reconcile_long_against_wide` hardened (exact count, no
+  duplicate keys, identity-field checks) and documented as a secondary
+  in-memory diagnostic; the authoritative gate is `validate_persisted_long`.
+* **P4-A03 (coherent publication).** `run_phase4` now **stages** all outputs in
+  a private `.staging-*` dir, validates the staged long, writes a
+  **`phase4_generation.json` manifest last** binding the consumed Phase 3
+  identity and every output's SHA-256 / schema / rows, and `os.replace`s marker
+  last (atomic commit); a current generation is rotated to `*.prev` only if it
+  verifies. New `verify_phase4_publication` (consumer gate) +
+  `restore_previous_phase4_generation`. A failure before the first replace
+  leaves the previous generation intact; a failure during the replaces leaves a
+  state `verify_phase4_publication` reports invalid; a mixed set is never
+  silently accepted. `phase4_generation_id` is derived from analytical content
+  (Phase 3 identity + the two byte-deterministic data artifacts + long
+  cardinality) so it is stable across runs and `block_rows`. Doc claim "recorded
+  in every Phase 4 output" corrected — the identity lives in the report + the
+  manifest.
+* **P4-A04 (determinism contract).** Documentation/tests now separate **logical
+  determinism** (identical schema/rows/values/NA/order/lineage across any valid
+  `block_rows`, incl. a non-divisible final block) from **physical byte
+  repeatability** (byte-identical Parquet only under a fixed writer +
+  environment + `block_rows`; the long file's hash changes with `block_rows`
+  because its row-group structure does; wide/metadata do not). New
+  `deterministic_report_view` + `VARIABLE_REPORT_FIELDS` enumerate every
+  intentionally variable report field (timestamps, durations, peak allocation,
+  paths, block-size-dependent layout).
+* **P4-A05 (DQ semantics / field contracts).** `dq_part2a_no_matching_part2`
+  documented accurately as *"no matching Part_2 row with a usable (non-null)
+  Total All comparator"* (covers both no-Part_2-row and Part_2-row-with-NA-
+  comparator — matching the frozen `part_2a_subset_conformance`); the four
+  Part_2A states are spelled out. Frozen helper semantics untouched. DQ policy
+  rewritten into four **non-mutually-exclusive** categories (factual condition
+  flag / structurally expected / anomalous / legitimate classification) — a
+  `dq_` flag for a structural condition is by design, not a contradiction.
+  `reporting_period_start_date` resolution **enforced** to `datetime64[us]`
+  (`.astype`) and asserted in `build_analytical_wide`; docs corrected from
+  `datetime64[ns]`.
+* **Optional (§7 float64→int).** Addressed: `_dense_long_chunk` now carries
+  `pathway_count` through an integer-preserving nullable path (no `2**53`
+  ceiling).
+
+Regression: **277 pass** (208 frozen unchanged + 69 in `test_transform.py`:
+29 original + 40 new adversarial). Real April–June result unchanged: wide
+541,363 × 138; long 56,843,115 (= wide × 105); zero cells 35,174,239; NA cells
+17,364,420; positive 4,304,456; P2-U7 violations 0/1/2, unmatched 5/3/0.
+`phase4_generation_id` stable across re-runs. No commit/tag/milestone.
+
+## D-040 — Phase 4 transformation: analytical-wide + dense waiting-band-long
+**2026-09-09 (Phase 4).** Context: move from the validated, provenance-bound,
+source-shaped Phase 3 publication to deterministic analysis-ready datasets
+without re-deriving the input from raw CSVs or weakening any frozen contract.
+Code: `src/nhs_rtt/transform.py`; tests: `tests/test_transform.py` (29 new);
+doc: `docs/phase4_transformation.md`; notebook:
+`notebooks/04_transformation_analytical_dataset.ipynb`.
+
+* **Input gate.** `load_verified_publication` refuses to read unless
+  `crossmonth.verify_publication("data/interim")` returns `valid: True`
+  (`PublicationNotVerifiedError`), then re-checks row count / provenance columns
+  / candidate-key usability. The Phase 3 publication is never written.
+* **Dataset A — analytical-wide** (`data/processed/rtt_analytical_wide.parquet`).
+  One row per accepted Phase 3 source row (**541,363 → 541,363**, asserted);
+  grain = the frozen candidate key (`Period` ↔ `reporting_month` 1:1), asserted
+  unique. All 125 source+provenance columns carried through **verbatim** (no
+  `fillna(0)`), plus **13 derived columns**: 4 reporting-time
+  (`reporting_year/month_num/month_name/period_start_date` — a sortable monthly
+  anchor, *not* an event date; month-end/stock-flow model stays Phase 5, P2-U5);
+  5 neutral classifications (`is_treatment_function_total`,
+  `is_nonc_commissioner`, `rtt_part_event_basis`, `rtt_part_carries_bands`,
+  `rtt_part_is_month_end_snapshot`); 4 row-level DQ flags
+  (`dq_all_bands_missing`, `dq_total_missing`, `dq_part2a_gt_part2`,
+  `dq_part2a_no_matching_part2`). Classifications are kept separate from `dq_`
+  flags — legitimate source categories are not labelled errors. The two
+  `dq_part2a_*` flags reproduce the frozen `part_2a_subset_conformance`
+  per-month counts exactly (P2-U7 preserved & flagged, never capped).
+* **Dataset B — dense waiting-band-long**
+  (`data/processed/rtt_waiting_band_long.parquet`). Every wide row → exactly
+  105 ordered band rows including source-`<NA>` cells, so
+  `len(long) == len(wide) × 105 = 56,843,115`. `pathway_count` keeps explicit
+  `0` and source `<NA>` distinct; `wait_band_upper_weeks` is `<NA>` for the
+  open `>104` band (no invented maximum). Lineage
+  `(source_file, source_row_index, wait_band_order)`; `source_sha256` retained.
+  Streamed to Parquet in 40,000-wide-row blocks via `pyarrow.ParquetWriter`.
+* **Dense-long benchmark (brief §8).** Implemented and measured on the dev
+  machine: **56,843,115 rows, ~19 MB Parquet (zstd), ~77 s build+write, ~0.55
+  GiB peak Python allocation**, full read-back + cell-level 56.8M-cell
+  reconciliation (0 mismatches) comfortable in memory. **Dense long is
+  practical and is retained; no sparse alternative introduced.**
+* **Wait-band metadata** (`data/processed/wait_band_metadata.parquet`, 105
+  rows) derived from `semantics.expected_week_band_names()` /
+  `parse_week_band()` — no second hand list. Week boundaries + **derived**
+  (labelled) day ranges per P2-U6; `is_open_ended`. No KPI/threshold flags
+  (Phase 7).
+* **Report.** `phase4_transformation_report.{json,md}` separates row-level
+  quality conditions from dataset-level diagnostics (input integrity,
+  transformation integrity, missingness, semantic diagnostics incl. the
+  frozen per-month `part_2a_subset_conformance` and C_999/NONC coverage,
+  mapping diagnostics via `crossmonth.mapping_diagnostics`, dense-long
+  benchmark). No substantive waiting-time interpretation.
+* **Determinism.** Re-runs produce byte-identical wide / long / metadata
+  Parquet (verified by SHA-256 and a `block_rows` change); only the report's
+  `generated_utc` varies.
+* **Scope.** No DuckDB/SQL, no dimensional model, no surrogate-key
+  architecture, no calendar dimension, no KPI logic, no BI/ML/Spark. Outputs
+  live in the already-git-ignored `data/processed/`. Frozen Phase 1–3 source,
+  tests and notebooks 01–03 unchanged. Regression: **237 pass** (208 frozen +
+  29 Phase 4). `phase-4-pass` not created — awaits independent audit.
+
 ## D-039 — Phase 3 closure remediation (immutable snapshot; verified publication metadata)
 **2026-09-08.** The first-remediation closure audit
 (`docs/phase3_codex_closure_audit.md`, PASS WITH CHANGES) confirmed P3-A01 / A02

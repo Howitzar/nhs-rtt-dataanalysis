@@ -56,7 +56,7 @@ Evidence classes: **DOCS+DATA** = NHS definition + shown in June data;
 | A-07 `C_999` may be summed with specialties | ✅ **No — double-counts** (rule supported). `C_999` = the sum of the group's *available* non-C_999 rows on every numeric column with **0 numeric mismatches** under the stated zero-contribution convention, over all 40,636 groups (each with exactly one C_999 row, ≥1 detail row; detail rows per group range **1–23**, only 18 groups carry all 23). 928,416 comparisons are both-missing and 588,157 are agg-zero vs all-missing detail — reported separately, not counted as observed equality. | DOCS (rule) + DATA | `rtt_semantics.md` §6; `outputs/phase2/facts.json` |
 | A-08 rows may be summed | ✅ **Only with rules.** Aggregation-safety matrix + double-counting risks documented. Never sum across `RTT Part Type` (`Part_2A` ⊆ `Part_2`); exclude `C_999` for specialty sums; never sum snapshot parts across months. | DOCS+DATA | `rtt_grain_and_aggregation.md` §4–5 |
 | A-09 primary key unknown | ✅ **Best-supported key found** (not an NHS-guaranteed PK): `Period · Provider Org Code · Commissioner Org Code · RTT Part Type · Treatment Function Code` — unique for all 182,411 June rows. No surrogate key manufactured. | DATA (grain: DOCS) | `rtt_grain_and_aggregation.md` §1–2 |
-| A-10 reshape week bands now | ➡️ **Still deferred** (Phase 2 must not reshape). Band structure/inclusivity now documented (§3), so a later phase can melt safely. | — | `rtt_semantics.md` §3 |
+| A-10 reshape week bands now | ✅ **Done in Phase 4.** `nhs_rtt.transform` melts the 105 bands to a **dense** long form (`data/processed/rtt_waiting_band_long.parquet`, 56,843,115 rows = 541,363 × 105) with cell-level reconciliation to the wide form, explicit `0` vs source `<NA>` preserved, and lineage `(source_file, source_row_index, wait_band_order)`. Band metadata derived from the frozen contract. `docs/phase4_transformation.md` §5, §7–8; `decisions.md` D-040. | DATA | `docs/phase4_transformation.md` |
 | A-11 which parent hierarchy | 🟡 Provider Parent (ICB) and Commissioner Parent are **labels on detail rows**, no aggregate rows. Which to use is an analysis choice, not a data fact. | DATA | `rtt_grain_and_aggregation.md` §3–4 |
 | A-12 `Period` → calendar month | ➡️ Single value `RTT-June-2026`; mapping/formatting is a later-phase concern (P2-U5). | UNRESOLVED | — |
 | A-13 `RTT Part Type` mutually exclusive & exhaustive | 🟡 1A/1B/2/2A/3 are distinct populations, **but `Part_2A` ⊆ `Part_2`** (S1 Annex B) so not disjoint; not "exhaustive of pathways" in a set sense (different event bases). | DOCUMENTED | `rtt_semantics.md` §2 |
@@ -97,11 +97,19 @@ Evidence classes: **DOCS+DATA** = NHS definition + shown in June data;
   `reporting_month` that must agree with the filename; revised releases resolve
   by explicit registry selection or fail closed; the *selected* identity is
   bound to the *published* bytes via the immutable snapshot (P3-A02/A03, D-039).
-  Mapping `Period` to a calendar **month-end date** and the flow-vs-stock
-  temporal model in analysis remain Phase 4/5. Part-specific temporal meaning
-  (flow vs month-end stock) is documented in `rtt_semantics.md` §2.
+  In **Phase 4**, `nhs_rtt.transform` derives `reporting_period_start_date`
+  (first day of the reporting month) as a **sortable monthly anchor — not an
+  event date**, alongside `reporting_year` / `reporting_month_num` /
+  `reporting_month_name`; the raw `Period` is retained unchanged. Mapping to a
+  calendar **month-end date** and the flow-vs-stock analytical temporal model
+  remain **Phase 5** (`rtt_part_event_basis` / `rtt_part_is_month_end_snapshot`
+  make the stock/flow distinction visible; `docs/phase4_transformation.md` §3–4).
 * **P2-U6** full per-band day ranges — **narrowed**: 5 NHS examples + stated
   sequence; intermediate bounds derived (`7n+1 … 7(n+1)` for band `n`–`n+1`).
+  **Phase 4** builds `data/processed/wait_band_metadata.parquet` (105 rows) with
+  `wait_band_lower_days` / `wait_band_upper_days` present and **explicitly
+  labelled DERIVED** (`docs/phase4_transformation.md` §8). No KPI/threshold band
+  flags (`over_18_weeks` etc.) — that stays Phase 7.
 * **P2-U7** the `Part_2A > Part_2` count exception — a source data-quality
   issue. **Still carried after Phase 3.** `nhs_rtt.crossmonth.part2a_subset_
   diagnostics` runs the frozen conformance check per month; values are preserved
